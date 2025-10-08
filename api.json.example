@@ -1,0 +1,6 @@
+{
+  "service": "talks",
+  "key": "여기에_DID_API_키를_입력하세요",
+  "openaiKey": "여기에_OpenAI_API_키를_입력하세요",
+  "url": "https://api.d-id.com"
+}

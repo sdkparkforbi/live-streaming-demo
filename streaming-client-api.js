@@ -2,7 +2,31 @@
 const fetchJsonFile = await fetch('./api.json');
 const DID_API = await fetchJsonFile.json();
 
-if (DID_API.key == '🤫') alert('Please put your api key inside ./api.json and restart..');
+// OpenAI 함수
+async function callOpenAI(userInput) {
+    try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${DID_API.openaiKey}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: 'gpt-4o-mini',
+                messages: [
+                    { role: 'system', content: '질문에 대해 간결하게 답변해 주세요. 마크업 기능은 활용하지 마세요.' },
+                    { role: 'user', content: userInput }
+                ]
+            })
+        });
+        
+        const data = await response.json();
+        return data.choices[0].message.content;
+    } catch (error) {
+        console.error('OpenAI API Error:', error);
+        return '죄송합니다. 응답 생성 중 오류가 발생했습니다.';
+    }
+}
 
 const RTCPeerConnection = (
   window.RTCPeerConnection ||
@@ -21,7 +45,6 @@ let lastBytesReceived;
 let videoIsPlaying = false;
 let streamVideoOpacity = 0;
 
-// Set this variable to true to request stream warmup upon connection to mitigate potential jittering issues
 const stream_warmup = true;
 let isStreamReady = !stream_warmup;
 
@@ -29,39 +52,30 @@ const idleVideoElement = document.getElementById('idle-video-element');
 const streamVideoElement = document.getElementById('stream-video-element');
 idleVideoElement.setAttribute('playsinline', '');
 streamVideoElement.setAttribute('playsinline', '');
-const peerStatusLabel = document.getElementById('peer-status-label');
-const iceStatusLabel = document.getElementById('ice-status-label');
-const iceGatheringStatusLabel = document.getElementById('ice-gathering-status-label');
-const signalingStatusLabel = document.getElementById('signaling-status-label');
-const streamingStatusLabel = document.getElementById('streaming-status-label');
-const streamEventLabel = document.getElementById('stream-event-label');
+
+// 상태 label들은 UI에서 제거되었으므로 null 처리
+const peerStatusLabel = null;
+const iceStatusLabel = null;
+const iceGatheringStatusLabel = null;
+const signalingStatusLabel = null;
+const streamingStatusLabel = null;
+const streamEventLabel = null;
+
+// 연결 상태 메시지 요소
+const connectionStatus = document.getElementById('connection-status');
+const subtitleElement = document.getElementById('subtitle');
 
 const presenterInputByService = {
   talks: {
-    source_url: 'https://create-images-results.d-id.com/DefaultPresenters/Emma_f/v1_image.jpeg',
+    source_url: 'https://symmetrical-rotary-phone-wrwp6v4p7rx2g6p-8000.app.github.dev/my-photo.jpg',
   },
   clips: {
-    presenter_id: 'v2_public_alex@qcvo4gupoy',
-    driver_id: 'e3nbserss8',
+    presenter_id: 'v2_public_Alyssa_NoHands_BlackShirt_Home@Mvn6Nalx90',
   },
 };
 
-const scriptConfigs = {
-  audio: {
-    type: 'audio',
-    audio_url: 'https://d-id-public-bucket.s3.us-west-2.amazonaws.com/webrtc.mp3',
-  },
-  text: {
-    type: 'text',
-    provider: { type: 'microsoft', voice_id: 'en-US-AndrewNeural' },
-    input: `Scale up your video production with a digital twin, who can say whatever you want in any language you choose. Train an agent on your content and enable 24/7 personal engagement with your community. <break time="1500ms"/>`,
-    // Please note that the SSML notation is different with ElevenLabs voices. Refer to this documentation - https://docs.d-id.com/reference/tts-elevenlabs
-    ssml: true,
-  },
-};
-
-const connectButton = document.getElementById('connect-button');
-connectButton.onclick = async () => {
+// 내부적으로 사용할 연결 함수 (자동 연결에서만 사용)
+async function connectToStream() {
   if (peerConnection && peerConnection.connectionState === 'connected') {
     return;
   }
@@ -69,11 +83,6 @@ connectButton.onclick = async () => {
   stopAllStreams();
   closePC();
 
-  /**
-   * Set 'stream_warmup' to 'true' in the payload to initiate idle streaming at the beginning of the connection, addressing jittering issues.
-   * The idle streaming process is transparent to the user and is concealed by triggering a 'stream/ready' event on the data channel,
-   * indicating that idle streaming has concluded and the stream channel is ready for use.
-   */
   const sessionResponse = await fetchWithRetries(`${DID_API.url}/${DID_API.service}/streams`, {
     method: 'POST',
     headers: {
@@ -107,10 +116,14 @@ connectButton.onclick = async () => {
       session_id: sessionId,
     }),
   });
-};
+}
 
 async function startStreamWithScript(script) {
-  // connectionState not supported in firefox
+  console.log('=== startStreamWithScript DEBUG ===');
+  console.log('peerConnection?.signalingState:', peerConnection?.signalingState);
+  console.log('peerConnection?.iceConnectionState:', peerConnection?.iceConnectionState);
+  console.log('isStreamReady:', isStreamReady);
+
   if (
     (peerConnection?.signalingState === 'stable' || peerConnection?.iceConnectionState === 'connected') &&
     isStreamReady
@@ -123,7 +136,13 @@ async function startStreamWithScript(script) {
       },
       body: JSON.stringify({
         script,
-        config: { stitch: true },
+        config: { 
+          stitch: true,
+          auto_match: true,
+          normalization_factor: 1.0,
+          sharpen: true,
+          align_driver: true
+        },
         session_id: sessionId,
         ...(DID_API.service === 'clips' && {
           background: { color: '#FFFFFF' },
@@ -135,9 +154,72 @@ async function startStreamWithScript(script) {
   }
 }
 
-document.getElementById('audio-button')?.addEventListener('click', () => { startStreamWithScript(scriptConfigs.audio) });
-document.getElementById('text-button')?.addEventListener('click', () => { startStreamWithScript(scriptConfigs.text) });
+// 음성 인식 설정
+const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+recognition.lang = 'ko-KR';
+recognition.continuous = false;
 
+let isRecognizing = false;
+
+recognition.onresult = async (event) => {
+    const userInput = event.results[0][0].transcript;
+    console.log('User input:', userInput);
+    
+    // 사용자 입력 자막 표시
+    if (subtitleElement) {
+        subtitleElement.style.display = 'block';
+        subtitleElement.textContent = `👤 ${userInput}`;
+    }
+    
+    const aiResponse = await callOpenAI(userInput);
+    console.log('AI Response:', aiResponse);
+    
+    // AI 응답 자막 표시
+    if (subtitleElement) {
+        subtitleElement.textContent = `🤖 ${aiResponse}`;
+    }
+    
+    const script = {
+        type: 'text',
+        provider: { type: 'microsoft', voice_id: 'ko-KR-InJoonNeural' },
+        input: aiResponse,
+        ssml: false
+    };
+    
+    console.log('=== Calling startStreamWithScript ===');
+    console.log('Script:', script);
+    console.log('Script.input length:', script.input.length);
+    
+    const result = await startStreamWithScript(script);
+    
+    console.log('=== startStreamWithScript completed ===');
+    console.log('Result:', result);
+};
+
+recognition.onend = () => {
+    isRecognizing = false;
+    console.log('음성 인식 종료');
+};
+
+// 음성 인식 재시작 버튼
+document.getElementById('mic-button')?.addEventListener('click', () => {
+    if (isRecognizing) {
+        recognition.stop();
+        isRecognizing = false;
+    }
+    
+    setTimeout(() => {
+        try {
+            recognition.start();
+            isRecognizing = true;
+            console.log('🎤 음성 인식 재시작');
+        } catch (e) {
+            console.log('음성 인식 시작 실패:', e.message);
+        }
+    }, 100);
+});
+
+// 종료 버튼
 const destroyButton = document.getElementById('destroy-button');
 destroyButton.onclick = async () => {
   await fetch(`${DID_API.url}/${DID_API.service}/streams/${streamId}`, {
@@ -154,9 +236,12 @@ destroyButton.onclick = async () => {
 };
 
 function onIceGatheringStateChange() {
-  iceGatheringStatusLabel.innerText = peerConnection.iceGatheringState;
-  iceGatheringStatusLabel.className = 'iceGatheringState-' + peerConnection.iceGatheringState;
+  if (iceGatheringStatusLabel) {
+    iceGatheringStatusLabel.innerText = peerConnection.iceGatheringState;
+    iceGatheringStatusLabel.className = 'iceGatheringState-' + peerConnection.iceGatheringState;
+  }
 }
+
 function onIceCandidate(event) {
   console.log('onIceCandidate', event);
   if (event.candidate) {
@@ -176,7 +261,6 @@ function onIceCandidate(event) {
       }),
     });
   } else {
-    // For the initial 2 sec idle stream at the beginning of the connection, we utilize a null ice candidate.
     fetch(`${DID_API.url}/${DID_API.service}/streams/${streamId}/ice`, {
       method: 'POST',
       headers: {
@@ -189,37 +273,43 @@ function onIceCandidate(event) {
     });
   }
 }
+
 function onIceConnectionStateChange() {
-  iceStatusLabel.innerText = peerConnection.iceConnectionState;
-  iceStatusLabel.className = 'iceConnectionState-' + peerConnection.iceConnectionState;
+  if (iceStatusLabel) {
+    iceStatusLabel.innerText = peerConnection.iceConnectionState;
+    iceStatusLabel.className = 'iceConnectionState-' + peerConnection.iceConnectionState;
+  }
   if (peerConnection.iceConnectionState === 'failed' || peerConnection.iceConnectionState === 'closed') {
     stopAllStreams();
     closePC();
   }
 }
+
 function onConnectionStateChange() {
-  // not supported in firefox
-  peerStatusLabel.innerText = peerConnection.connectionState;
-  peerStatusLabel.className = 'peerConnectionState-' + peerConnection.connectionState;
+  if (peerStatusLabel) {
+    peerStatusLabel.innerText = peerConnection.connectionState;
+    peerStatusLabel.className = 'peerConnectionState-' + peerConnection.connectionState;
+  }
   if (peerConnection.connectionState === 'connected') {
     playIdleVideo();
-    /**
-     * A fallback mechanism: if the 'stream/ready' event isn't received within 5 seconds after asking for stream warmup,
-     * it updates the UI to indicate that the system is ready to start streaming data.
-     */
     setTimeout(() => {
       if (!isStreamReady) {
         console.log('forcing stream/ready');
         isStreamReady = true;
-        streamEventLabel.innerText = 'ready';
-        streamEventLabel.className = 'streamEvent-ready';
+        if (streamEventLabel) {
+          streamEventLabel.innerText = 'ready';
+          streamEventLabel.className = 'streamEvent-ready';
+        }
       }
     }, 5000);
   }
 }
+
 function onSignalingStateChange() {
-  signalingStatusLabel.innerText = peerConnection.signalingState;
-  signalingStatusLabel.className = 'signalingState-' + peerConnection.signalingState;
+  if (signalingStatusLabel) {
+    signalingStatusLabel.innerText = peerConnection.signalingState;
+    signalingStatusLabel.className = 'signalingState-' + peerConnection.signalingState;
+  }
 }
 
 function onVideoStatusChange(videoIsPlaying, stream) {
@@ -227,7 +317,7 @@ function onVideoStatusChange(videoIsPlaying, stream) {
 
   if (videoIsPlaying) {
     status = 'streaming';
-    streamVideoOpacity = isStreamReady ? 1 : 0;
+    streamVideoOpacity = 1;
     setStreamVideoElement(stream);
   } else {
     status = 'empty';
@@ -237,21 +327,13 @@ function onVideoStatusChange(videoIsPlaying, stream) {
   streamVideoElement.style.opacity = streamVideoOpacity;
   idleVideoElement.style.opacity = 1 - streamVideoOpacity;
 
-  streamingStatusLabel.innerText = status;
-  streamingStatusLabel.className = 'streamingState-' + status;
+  if (streamingStatusLabel) {
+    streamingStatusLabel.innerText = status;
+    streamingStatusLabel.className = 'streamingState-' + status;
+  }
 }
 
 function onTrack(event) {
-  /**
-   * The following code is designed to provide information about wether currently there is data
-   * that's being streamed - It does so by periodically looking for changes in total stream data size
-   *
-   * This information in our case is used in order to show idle video while no video is streaming.
-   * To create this idle video use the POST https://api.d-id.com/talks (or clips) endpoint with a silent audio file or a text script with only ssml breaks
-   * https://docs.aws.amazon.com/polly/latest/dg/supportedtags.html#break-tag
-   * for seamless results use `config.fluent: true` and provide the same configuration as the streaming video
-   */
-
   if (!event.track) return;
 
   statsIntervalId = setInterval(async () => {
@@ -271,14 +353,6 @@ function onTrack(event) {
 }
 
 function onStreamEvent(message) {
-  /**
-   * This function handles stream events received on the data channel.
-   * The 'stream/ready' event received on the data channel signals the end of the 2sec idle streaming.
-   * Upon receiving the 'ready' event, we can display the streamed video if one is available on the stream channel.
-   * Until the 'ready' event is received, we hide any streamed video.
-   * Additionally, this function processes events for stream start, completion, and errors. Other data events are disregarded.
-   */
-
   if (pcDataChannel.readyState === 'open') {
     let status;
     const [event, _] = message.data.split(':');
@@ -289,6 +363,18 @@ function onStreamEvent(message) {
         break;
       case 'stream/done':
         status = 'done';
+        // 아바타가 말을 끝냈을 때 음성 인식 재시작
+        setTimeout(() => {
+          if (peerConnection?.connectionState === 'connected' && !isRecognizing) {
+            try {
+              recognition.start();
+              isRecognizing = true;
+              console.log('🎤 아바타 응답 완료 후 음성 인식 재시작');
+            } catch (e) {
+              console.log('음성 인식 재시작 실패:', e.message);
+            }
+          }
+        }, 1000);
         break;
       case 'stream/ready':
         status = 'ready';
@@ -301,18 +387,21 @@ function onStreamEvent(message) {
         break;
     }
 
-    // Set stream ready after a short delay, adjusting for potential timing differences between data and stream channels
     if (status === 'ready') {
       setTimeout(() => {
         console.log('stream/ready');
         isStreamReady = true;
-        streamEventLabel.innerText = 'ready';
-        streamEventLabel.className = 'streamEvent-ready';
+        if (streamEventLabel) {
+          streamEventLabel.innerText = 'ready';
+          streamEventLabel.className = 'streamEvent-ready';
+        }
       }, 1000);
     } else {
       console.log(event);
-      streamEventLabel.innerText = status === 'dont-care' ? event : status;
-      streamEventLabel.className = 'streamEvent-' + status;
+      if (streamEventLabel) {
+        streamEventLabel.innerText = status === 'dont-care' ? event : status;
+        streamEventLabel.className = 'streamEvent-' + status;
+      }
     }
   }
 }
@@ -347,9 +436,13 @@ function setStreamVideoElement(stream) {
 
   streamVideoElement.srcObject = stream;
   streamVideoElement.loop = false;
-  streamVideoElement.mute = !isStreamReady;
+  streamVideoElement.muted = false;
+  
+  // 크기 강제 설정
+  streamVideoElement.style.width = '400px';
+  streamVideoElement.style.height = '400px';
+  streamVideoElement.style.objectFit = 'contain';
 
-  // safari hotfix
   if (streamVideoElement.paused) {
     streamVideoElement
       .play()
@@ -359,7 +452,17 @@ function setStreamVideoElement(stream) {
 }
 
 function playIdleVideo() {
-  idleVideoElement.src = DID_API.service == 'clips' ? 'alex_v2_idle.mp4' : 'emma_idle.mp4';
+  // 생성한 idle 비디오 사용
+  idleVideoElement.src = 'my_avatar_idle.mp4';
+  idleVideoElement.style.display = 'block';
+  
+  // 크기 강제 설정
+  idleVideoElement.style.width = '400px';
+  idleVideoElement.style.height = '400px';
+  idleVideoElement.style.objectFit = 'contain';
+  
+  // transform 초기화 (scale 제거)
+  idleVideoElement.style.transform = 'translate(-50%, -50%)';
 }
 
 function stopAllStreams() {
@@ -386,11 +489,11 @@ function closePC(pc = peerConnection) {
   clearInterval(statsIntervalId);
   isStreamReady = !stream_warmup;
   streamVideoOpacity = 0;
-  iceGatheringStatusLabel.innerText = '';
-  signalingStatusLabel.innerText = '';
-  iceStatusLabel.innerText = '';
-  peerStatusLabel.innerText = '';
-  streamEventLabel.innerText = '';
+  if (iceGatheringStatusLabel) iceGatheringStatusLabel.innerText = '';
+  if (signalingStatusLabel) signalingStatusLabel.innerText = '';
+  if (iceStatusLabel) iceStatusLabel.innerText = '';
+  if (peerStatusLabel) peerStatusLabel.innerText = '';
+  if (streamEventLabel) streamEventLabel.innerText = '';
   console.log('stopped peer connection');
   if (pc === peerConnection) {
     peerConnection = null;
@@ -416,3 +519,51 @@ async function fetchWithRetries(url, options, retries = 1) {
     }
   }
 }
+
+// 페이지 로드 시 자동 연결 및 음성 인식 시작
+(async function autoStart() {
+    console.log('🚀 자동 연결 시작...');
+    
+    await new Promise(resolve => {
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', resolve);
+        } else {
+            resolve();
+        }
+    });
+    
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await connectToStream();
+    
+    let attempts = 0;
+    const waitForConnection = setInterval(() => {
+        if (peerConnection?.connectionState === 'connected' && isStreamReady) {
+            clearInterval(waitForConnection);
+            console.log('✅ 연결 완료! 음성 인식 시작...');
+            
+            // 연결 완료 메시지
+            if (connectionStatus) {
+                connectionStatus.textContent = '✅ 연결 완료! 말씀해주세요.';
+                connectionStatus.style.color = 'green';
+            }
+            
+            setTimeout(() => {
+                recognition.start();
+                isRecognizing = true;
+                console.log('🎤 음성 인식 활성화');
+                
+                // 연결 상태 메시지 숨기기
+                setTimeout(() => {
+                    if (connectionStatus) connectionStatus.style.display = 'none';
+                }, 2000);
+            }, 1000);
+        } else if (attempts++ > 20) {
+            clearInterval(waitForConnection);
+            console.log('⚠️ 연결 실패');
+            if (connectionStatus) {
+                connectionStatus.textContent = '❌ 연결 실패. 페이지를 새로고침하세요.';
+                connectionStatus.style.color = 'red';
+            }
+        }
+    }, 500);
+})();

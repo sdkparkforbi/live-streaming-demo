@@ -1,4 +1,36 @@
-.vscode
-node_modules
+# API 키 파일 - 절대 GitHub에 업로드하지 말 것!
 api.json
+
+# Node modules
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# 환경 변수
+.env
+.env.local
+
+# 개인 사진 및 비디오
+my-photo.jpg
+my_avatar_idle.mp4
+my_avatar_idle_backup.mp4
+
+# 백업 파일
+*.backup
+*_backup.*
+*_old.*
+
+# OS 파일
+.DS_Store
+Thumbs.db
+
+# 에디터 설정
+.vscode/
 .idea/
+
+# 로그 파일
+*.log
+
+# 스크립트 (API 키 포함될 수 있음)
+create-avatar.sh
